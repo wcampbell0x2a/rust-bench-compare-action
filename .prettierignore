@@ -1,1 +1,4 @@
 dist/*
+# Test fixtures are byte-exact: the golden markdown is the assertion itself and
+# the gungraun summary is copied verbatim from upstream.
+test/fixtures/*
