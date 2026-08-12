@@ -1,10 +1,12 @@
-# criterion-compare
+# rust-bench-compare
 
-Compare the performance of a PR against the base branch.
+Compare the performance of a PR with the base branch.
 
 ---
 
-> ⚠️ Performance benchmarks provided by this action may fluctuate as load on GitHub Actions does. Run benchmarks locally before making any decisions based on the results.
+This GitHub action compares the benchmark results of a PR with the results of
+the base branch. It uses the [criterion.rs](https://github.com/bheisler/criterion.rs/)
+or [gungraun](https://github.com/gungraun/gungraun) benchmarks of the project.
 
 The action builds and benchmarks the two branches in the same job on the same
 runner. Thus the two results come from the same hardware. The action does not
@@ -46,8 +48,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: boa-dev/criterion-compare-action@v3
+      - uses: wcampbell0x2a/rust-bench-compare-action@v3
         with:
+          # Optional. The benchmarking harness: `criterion` (default) or `gungraun`
+          harness: "criterion"
           cwd: "subDirectory (optional)"
           # Optional. Compare only this package
           package: "example-package"
@@ -57,7 +61,7 @@ jobs:
           defaultFeatures: false
           # Optional. Features activated in the benchmark
           features: "async,tokio-support"
-          # Needed. The name of the branch to compare with. This default uses the branch which is being pulled against
+          # Needed. The name of the branch to compare with. The default is the target branch of the pull request
           branchName: ${{ github.base_ref }}
           # Optional. Default is `${{ github.token }}`.
           token: ${{ secrets.GITHUB_TOKEN }}

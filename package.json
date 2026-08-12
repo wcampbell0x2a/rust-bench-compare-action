@@ -1,8 +1,8 @@
 {
-  "name": "criterion-compare-action",
+  "name": "rust-bench-compare-action",
   "version": "3.2.4",
-  "repository": "https://github.com/boa-dev/criterion-compare-action/",
-  "description": "Compare the performance of Rust project branches using criterion",
+  "repository": "https://github.com/wcampbell0x2a/rust-bench-compare-action/",
+  "description": "Compare the performance of Rust project branches using criterion or gungraun",
   "main": "main.js",
   "scripts": {
     "test": "node --test \"test/*.test.js\"",
