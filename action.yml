@@ -1,6 +1,10 @@
-name: "Criterion Compare PRs"
-description: "Run Criterion against PRs"
+name: "Rust Bench Compare PRs"
+description: "Run Criterion or Gungraun benchmarks against PRs"
 inputs:
+  harness:
+    description: "The benchmarking harness to use: `criterion` or `gungraun`. The `gungraun` harness requires `gungraun-runner` and Valgrind on PATH - use `gungraun/setup-gungraun@v1` before this step."
+    required: false
+    default: "criterion"
   token:
     description: "Github Token required to comment in the PR"
     required: false
@@ -29,6 +33,17 @@ inputs:
     description: "Enable the default features of a crate while running the benchmark, usually the default features are enabled"
     required: false
     default: true
+  before:
+    description: "Run this command before every benchmark"
+    required: false
+    default: ""
+outputs:
+  stdout:
+    description: "The raw comparison output produced by the harness"
+  stderr:
+    description: "The raw stderr captured while producing the comparison"
+  comment-id:
+    description: "The id of the created PR comment, if commenting succeeded"
 runs:
-  using: "node16"
+  using: "node24"
   main: "dist/index.js"

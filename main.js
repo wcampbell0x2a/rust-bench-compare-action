@@ -1,29 +1,47 @@
-const { inspect } = require("util");
-const exec = require("@actions/exec");
-const core = require("@actions/core");
-const github = require("@actions/github");
+import { inspect } from "node:util";
+import * as exec from "@actions/exec";
+import * as core from "@actions/core";
+import * as github from "@actions/github";
+
+import { renderMarkdown, renderTable } from "./lib/report.js";
+import criterion from "./runners/criterion.js";
+import gungraun from "./runners/gungraun.js";
 
 const context = github.context;
 
-async function main() {
-  const inputs = {
-    token: core.getInput("token", { required: true }),
-    branchName: core.getInput("branchName", { required: true }),
-    cwd: core.getInput("cwd"),
-    benchName: core.getInput("benchName"),
-    package: core.getInput("package"),
-    features: core.getInput("features"),
-    defaultFeatures: core.getInput("defaultFeatures"),
-  };
-  core.debug(`Inputs: ${inspect(inputs)}`);
+const RUNNERS = {
+  criterion,
+  gungraun,
+};
 
-  const options = {};
-  let myOutput = "";
-  let myError = "";
-  if (inputs.cwd) {
-    options.cwd = inputs.cwd;
+function getRunner(harness) {
+  const runner = RUNNERS[harness];
+
+  if (!runner) {
+    throw new Error(
+      `Unknown harness '${harness}'. Supported values: ${Object.keys(
+        RUNNERS
+      ).join(", ")}.`
+    );
   }
 
+  return runner;
+}
+
+function getBooleanInput(name, fallback) {
+  const raw = core.getInput(name);
+
+  if (!raw) {
+    return fallback;
+  }
+
+  return raw.trim().toLowerCase() === "true";
+}
+
+/**
+ * Cargo flags are the same for every harness; only the args after `--` differ.
+ */
+function buildBenchCmd(inputs) {
   let benchCmd = ["bench"];
 
   if (inputs.package) {
@@ -42,44 +60,129 @@ async function main() {
     benchCmd = benchCmd.concat(["--features", inputs.features]);
   }
 
-  core.debug("### Install Critcmp ###");
-  await exec.exec("cargo", ["install", "critcmp"]);
+  return benchCmd;
+}
 
-  core.debug("### Benchmark starting ###");
-  await exec.exec(
-    "cargo",
-    benchCmd.concat(["--", "--save-baseline", "changes"]),
-    options
-  );
-  core.debug("Changes benchmarked");
-  await exec.exec("git", ["fetch"]);
-  await exec.exec("git", [
-    "checkout",
-    core.getInput("branchName") || github.base_ref,
-  ]);
-  core.debug("Checked out to base branch");
-  await exec.exec(
-    "cargo",
-    benchCmd.concat(["--", "--save-baseline", "base"]),
-    options
-  );
-  core.debug("Base benchmarked");
+function captureOptions(options) {
+  const captured = { stdout: "", stderr: "" };
 
-  options.listeners = {
-    stdout: (data) => {
-      myOutput += data.toString();
-    },
-    stderr: (data) => {
-      myError += data.toString();
+  return {
+    captured,
+    options: {
+      ...options,
+      listeners: {
+        stdout: (data) => {
+          captured.stdout += data.toString();
+        },
+        stderr: (data) => {
+          captured.stderr += data.toString();
+        },
+      },
     },
   };
+}
 
-  await exec.exec("critcmp", ["base", "changes"], options);
+async function main() {
+  const inputs = {
+    token: core.getInput("token", { required: true }),
+    branchName: core.getInput("branchName", { required: true }),
+    cwd: core.getInput("cwd"),
+    benchName: core.getInput("benchName"),
+    package: core.getInput("package"),
+    features: core.getInput("features"),
+    defaultFeatures: getBooleanInput("defaultFeatures", true),
+    harness: (core.getInput("harness") || "criterion").trim().toLowerCase(),
+    before: core.getInput("before"),
+  };
+  core.debug(`Inputs: ${inspect(inputs)}`);
 
-  core.setOutput("stdout", myOutput);
-  core.setOutput("stderr", myError);
+  const runner = getRunner(inputs.harness);
+  core.debug(`Using the '${runner.name}' harness`);
 
-  const resultsAsMarkdown = convertToMarkdown(myOutput);
+  const options = {};
+  if (inputs.cwd) {
+    options.cwd = inputs.cwd;
+  }
+
+  const benchCmd = buildBenchCmd(inputs);
+
+  const baseBranch =
+    inputs.branchName ||
+    (context.payload.pull_request && context.payload.pull_request.base.ref);
+
+  if (!baseBranch) {
+    throw new Error(
+      "Could not determine the base branch. Set the `branchName` input."
+    );
+  }
+
+  if (runner.prepare) {
+    await runner.prepare(options);
+  }
+
+  // Where to return to after benchmarking the base branch. `context.sha` is the
+  // merge commit on `pull_request` events, so prefer the PR head sha, which is
+  // guaranteed to exist in the checkout.
+  const headRef =
+    (context.payload.pull_request && context.payload.pull_request.head.sha) ||
+    context.sha;
+
+  // Each run's stdout is captured; whichever run produces the comparison is
+  // the one we parse.
+  let comparisonOutput = { stdout: "", stderr: "" };
+
+  // Runs on whichever branch is currently checked out, so the `before` command
+  // gets a chance to prepare each tree before its benchmarks are measured.
+  async function benchmark(extraArgs) {
+    if (inputs.before) {
+      await exec.exec(inputs.before, [], options);
+    }
+
+    const { captured, options: execOptions } = captureOptions(options);
+    await exec.exec("cargo", benchCmd.concat(["--"], extraArgs), execOptions);
+    return captured;
+  }
+
+  if (runner.order === "base-first") {
+    // gungraun compares against the saved baseline during the second run, so
+    // the base branch has to be measured first.
+    await exec.exec("git", ["fetch"]);
+    await exec.exec("git", ["checkout", baseBranch]);
+    core.debug("Checked out to base branch");
+
+    await benchmark(runner.benchArgsForBase());
+    core.debug("Base benchmarked");
+
+    await exec.exec("git", ["checkout", headRef]);
+    core.debug("Checked out back to PR head");
+
+    comparisonOutput = await benchmark(runner.benchArgsForChanges());
+    core.debug("Changes benchmarked");
+  } else {
+    await benchmark(runner.benchArgsForChanges());
+    core.debug("Changes benchmarked");
+
+    await exec.exec("git", ["fetch"]);
+    await exec.exec("git", ["checkout", baseBranch]);
+    core.debug("Checked out to base branch");
+
+    comparisonOutput = await benchmark(runner.benchArgsForBase());
+    core.debug("Base benchmarked");
+  }
+
+  if (!runner.comparisonFromSecondRun) {
+    comparisonOutput = await runner.compare(options);
+  }
+
+  core.setOutput("stdout", comparisonOutput.stdout);
+  core.setOutput("stderr", comparisonOutput.stderr);
+
+  const rows = runner.parse(comparisonOutput.stdout);
+  const resultsAsMarkdown = renderMarkdown(
+    rows,
+    context.sha,
+    runner.displayName
+  );
 
   // An authenticated instance of `@octokit/rest`
   const octokit = github.getOctokit(inputs.token);
@@ -104,202 +207,15 @@ async function main() {
     // If we can't post to the comment, display results here.
     // forkedRepos only have READ ONLY access on GITHUB_TOKEN
     // https://github.community/t5/GitHub-Actions/quot-Resource-not-accessible-by-integration-quot-for-adding-a/td-p/33925
-    const resultsAsObject = convertToTableObject(myOutput);
-    console.table(resultsAsObject);
+    console.table(renderTable(rows));
   }
 
   core.debug("Succesfully run!");
 }
 
-function convertDurToSeconds(dur, units) {
-  let seconds;
-  switch (units) {
-    case "s":
-      seconds = dur;
-      break;
-    case "ms":
-      seconds = dur / 1000;
-      break;
-    case "µs":
-      seconds = dur / 1000000;
-      break;
-    case "ns":
-      seconds = dur / 1000000000;
-      break;
-    default:
-      seconds = dur;
-      break;
-  }
-
-  return seconds;
+try {
+  await main();
+} catch (e) {
+  console.log(e.stack);
+  core.setFailed(`Unhanded error:\n${e}`);
 }
-
-function isSignificant(changesDur, changesErr, baseDur, baseErr) {
-  if (changesDur < baseDur) {
-    return changesDur + changesErr < baseDur || baseDur - baseErr > changesDur;
-  } else {
-    return changesDur - changesErr > baseDur || baseDur + baseErr < changesDur;
-  }
-}
-
-function convertToMarkdown(results) {
-  /* Example results:
-    group                            base                                   changes
-    -----                            ----                                   -------
-    character module                 1.03     22.2±0.41ms        ? B/sec    1.00     21.6±0.53ms        ? B/sec
-    directory module – home dir      1.02     21.7±0.69ms        ? B/sec    1.00     21.4±0.44ms        ? B/sec
-    full prompt                      1.08     46.0±0.90ms        ? B/sec    1.00     42.7±0.79ms        ? B/sec
-  */
-
-  let resultLines = results.trimRight().split("\n");
-  let benchResults = resultLines
-    .slice(2) // skip headers
-    .map((row) => row.split(/\s{2,}/)) // split if 2+ spaces together
-    .map(
-      ([
-        name,
-        baseFactor,
-        baseDuration,
-        _baseBandwidth,
-        changesFactor,
-        changesDuration,
-        _changesBandwidth,
-      ]) => {
-        let baseUndefined = typeof baseDuration === "undefined";
-        let changesUndefined = typeof changesDuration === "undefined";
-
-        if (!name || (baseUndefined && changesUndefined)) {
-          return "";
-        }
-
-        let difference = "N/A";
-        if (!baseUndefined && !changesUndefined) {
-          changesFactor = Number(changesFactor);
-          baseFactor = Number(baseFactor);
-
-          let changesDurSplit = changesDuration.split("±");
-          let changesUnits = changesDurSplit[1].slice(-2);
-          let changesDurSecs = convertDurToSeconds(
-            changesDurSplit[0],
-            changesUnits
-          );
-          let changesErrorSecs = convertDurToSeconds(
-            changesDurSplit[1].slice(0, -2),
-            changesUnits
-          );
-
-          let baseDurSplit = baseDuration.split("±");
-          let baseUnits = baseDurSplit[1].slice(-2);
-          let baseDurSecs = convertDurToSeconds(baseDurSplit[0], baseUnits);
-          let baseErrorSecs = convertDurToSeconds(
-            baseDurSplit[1].slice(0, -2),
-            baseUnits
-          );
-
-          difference = -(1 - changesDurSecs / baseDurSecs) * 100;
-          difference =
-            (changesDurSecs <= baseDurSecs ? "" : "+") +
-            difference.toFixed(2) +
-            "%";
-          if (
-            isSignificant(
-              changesDurSecs,
-              changesErrorSecs,
-              baseDurSecs,
-              baseErrorSecs
-            )
-          ) {
-            if (changesDurSecs < baseDurSecs) {
-              changesDuration = `**${changesDuration}**`;
-            } else if (changesDurSecs > baseDurSecs) {
-              baseDuration = `**${baseDuration}**`;
-            }
-
-            difference = `**${difference}**`;
-          }
-        }
-
-        if (baseUndefined) {
-          baseDuration = "N/A";
-        }
-
-        if (changesUndefined) {
-          changesDuration = "N/A";
-        }
-
-        name = name.replace(/\|/g, "\\|");
-
-        return `| ${name} | ${baseDuration} | ${changesDuration} | ${difference} |`;
-      }
-    )
-    .join("\n");
-
-  let shortSha = context.sha.slice(0, 7);
-  return `## Benchmark for ${shortSha}
-  <details>
-    <summary>Click to view benchmark</summary>
-
-| Test | Base         | PR               | % |
-|------|--------------|------------------|---|
-${benchResults}
-
-  </details>
-  `;
-}
-
-function convertToTableObject(results) {
-  /* Example results:
-    group                            base                                   changes
-    -----                            ----                                   -------
-    character module                 1.03     22.2±0.41ms        ? B/sec    1.00     21.6±0.53ms        ? B/sec
-    directory module – home dir      1.02     21.7±0.69ms        ? B/sec    1.00     21.4±0.44ms        ? B/sec
-    full prompt                      1.08     46.0±0.90ms        ? B/sec    1.00     42.7±0.79ms        ? B/sec
-  */
-
-  let resultLines = results.split("\n");
-  let benchResults = resultLines
-    .slice(2) // skip headers
-    .map((row) => row.split(/\s{2,}/)) // split if 2+ spaces together
-    .map(
-      ([
-        name,
-        baseFactor,
-        baseDuration,
-        _baseBandwidth,
-        changesFactor,
-        changesDuration,
-        _changesBandwidth,
-      ]) => {
-        changesFactor = Number(changesFactor);
-        baseFactor = Number(baseFactor);
-
-        let difference = -(1 - changesFactor / baseFactor) * 100;
-        difference =
-          (changesFactor <= baseFactor ? "" : "+") + difference.toPrecision(2);
-        if (changesFactor < baseFactor) {
-          changesDuration = `**${changesDuration}**`;
-        } else if (changesFactor > baseFactor) {
-          baseDuration = `**${baseDuration}**`;
-        }
-
-        return {
-          name,
-          baseDuration,
-          changesDuration,
-          difference,
-        };
-      }
-    );
-
-  return benchResults;
-}
-
-// IIFE to be able to use async/await
-(async () => {
-  try {
-    await main();
-  } catch (e) {
-    console.log(e.stack);
-    core.setFailed(`Unhanded error:\n${e}`);
-  }
-})();
