@@ -178,7 +178,11 @@ async function main() {
   core.setOutput("stderr", comparisonOutput.stderr);
 
   const rows = runner.parse(comparisonOutput.stdout);
-  const resultsAsMarkdown = renderMarkdown(rows, context.sha);
+  const resultsAsMarkdown = renderMarkdown(
+    rows,
+    context.sha,
+    runner.displayName
+  );
 
   // An authenticated instance of `@octokit/rest`
   const octokit = github.getOctokit(inputs.token);

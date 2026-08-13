@@ -218,6 +218,7 @@ function parse(stdout) {
 
 export default {
   name: "gungraun",
+  displayName: "Gungraun",
 
   // gungraun compares against a saved baseline during the run itself, so the
   // base branch must be benchmarked *first*.

@@ -193,9 +193,22 @@ test("criterion: rendered markdown is unchanged from the pre-refactor output", (
   const rows = criterion.parse(fixture("critcmp-output.txt"));
 
   assert.equal(
-    renderMarkdown(rows, "abc1234def5678"),
+    renderMarkdown(rows, "abc1234def5678", criterion.displayName),
     fixture("criterion-expected.md")
   );
+});
+
+test("report: the heading names the harness", () => {
+  const rows = gungraun.parse(fixture("gungraun-output.jsonl"));
+  const md = renderMarkdown(rows, "abc1234def5678", gungraun.displayName);
+
+  assert.ok(md.startsWith("## Gungraun Benchmark for abc1234\n"));
+});
+
+test("report: the heading omits the harness when none is given", () => {
+  const md = renderMarkdown([], "abc1234def5678");
+
+  assert.ok(md.startsWith("## Benchmark for abc1234\n"));
 });
 
 test("report: pipes in benchmark names are escaped", () => {

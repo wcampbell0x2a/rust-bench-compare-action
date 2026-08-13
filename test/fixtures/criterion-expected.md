@@ -1,4 +1,4 @@
-## Benchmark for abc1234
+## Criterion Benchmark for abc1234
   <details>
     <summary>Click to view benchmark</summary>
 

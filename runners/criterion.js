@@ -120,6 +120,7 @@ function parse(results) {
 
 export default {
   name: "criterion",
+  displayName: "Criterion",
 
   // criterion benches the PR first, then the base branch, then diffs the two
   // saved baselines with critcmp.
