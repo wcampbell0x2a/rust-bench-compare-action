@@ -22,9 +22,9 @@ fmt-check:
 fmt:
     npx prettier --write .
 
-# Verify dist/index.js matches a fresh build, the way CI does.
+# Verify dist/ matches a fresh build, the way CI does.
 check-dist: build
-    git diff --exit-code dist/index.js
+    git diff --exit-code dist/
 
 # Everything CI runs, in the same order.
 ci: fmt-check test check-dist

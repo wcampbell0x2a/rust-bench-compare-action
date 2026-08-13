@@ -1,7 +1,7 @@
-const exec = require("@actions/exec");
-const core = require("@actions/core");
+import * as exec from "@actions/exec";
+import * as core from "@actions/core";
 
-const { isSignificant } = require("../lib/report");
+import { isSignificant } from "../lib/report.js";
 
 function convertDurToSeconds(dur, units) {
   let seconds;
@@ -118,7 +118,7 @@ function parse(results) {
     .filter((row) => row !== null);
 }
 
-module.exports = {
+export default {
   name: "criterion",
 
   // criterion benches the PR first, then the base branch, then diffs the two

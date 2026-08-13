@@ -1,5 +1,5 @@
-const exec = require("@actions/exec");
-const core = require("@actions/core");
+import * as exec from "@actions/exec";
+import * as core from "@actions/core";
 
 // Metrics surfaced in the PR comment, in display order. These are the two
 // headline metrics gungraun's own terminal output leads with.
@@ -216,7 +216,7 @@ function parse(stdout) {
   return rows;
 }
 
-module.exports = {
+export default {
   name: "gungraun",
 
   // gungraun compares against a saved baseline during the run itself, so the

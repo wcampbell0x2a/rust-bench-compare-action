@@ -1,14 +1,13 @@
-const test = require("node:test");
-const assert = require("node:assert");
-const fs = require("node:fs");
-const path = require("node:path");
+import test from "node:test";
+import assert from "node:assert";
+import fs from "node:fs";
 
-const criterion = require("../runners/criterion");
-const gungraun = require("../runners/gungraun");
-const { renderMarkdown, escapeName } = require("../lib/report");
+import criterion from "../runners/criterion.js";
+import gungraun from "../runners/gungraun.js";
+import { renderMarkdown, escapeName } from "../lib/report.js";
 
 const fixture = (name) =>
-  fs.readFileSync(path.join(__dirname, "fixtures", name), "utf8");
+  fs.readFileSync(new URL(`fixtures/${name}`, import.meta.url), "utf8");
 
 test("criterion: parses the critcmp table", () => {
   const rows = criterion.parse(fixture("critcmp-output.txt"));

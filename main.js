@@ -1,15 +1,17 @@
-const { inspect } = require("util");
-const exec = require("@actions/exec");
-const core = require("@actions/core");
-const github = require("@actions/github");
+import { inspect } from "node:util";
+import * as exec from "@actions/exec";
+import * as core from "@actions/core";
+import * as github from "@actions/github";
 
-const { renderMarkdown, renderTable } = require("./lib/report");
+import { renderMarkdown, renderTable } from "./lib/report.js";
+import criterion from "./runners/criterion.js";
+import gungraun from "./runners/gungraun.js";
 
 const context = github.context;
 
 const RUNNERS = {
-  criterion: require("./runners/criterion"),
-  gungraun: require("./runners/gungraun"),
+  criterion,
+  gungraun,
 };
 
 function getRunner(harness) {
@@ -207,12 +209,9 @@ async function main() {
   core.debug("Succesfully run!");
 }
 
-// IIFE to be able to use async/await
-(async () => {
-  try {
-    await main();
-  } catch (e) {
-    console.log(e.stack);
-    core.setFailed(`Unhanded error:\n${e}`);
-  }
-})();
+try {
+  await main();
+} catch (e) {
+  console.log(e.stack);
+  core.setFailed(`Unhanded error:\n${e}`);
+}

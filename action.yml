@@ -45,5 +45,5 @@ outputs:
   comment-id:
     description: "The id of the created PR comment, if commenting succeeded"
 runs:
-  using: "node16"
+  using: "node24"
   main: "dist/index.js"
