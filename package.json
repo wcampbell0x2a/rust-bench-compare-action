@@ -1,6 +1,6 @@
 {
   "name": "rust-bench-compare-action",
-  "version": "3.2.4",
+  "version": "1.0.0",
   "repository": "https://github.com/wcampbell0x2a/rust-bench-compare-action/",
   "description": "Compare the performance of Rust project branches using criterion or gungraun",
   "main": "main.js",

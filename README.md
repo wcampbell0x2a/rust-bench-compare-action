@@ -27,7 +27,9 @@ Select the harness with the `harness` input:
 > **New name:** the previous name of this action was `criterion-compare-action`.
 > The action now supports more than criterion. The GitHub repository redirect
 > keeps the existing `uses: wcampbell0x2a/criterion-compare-action@v3`
-> references correct, but change them to the new name.
+> references correct, but change them to the new name. Versioning restarted
+> under the new name, so `criterion-compare-action@v3` becomes
+> `rust-bench-compare-action@v1`.
 
 ## Example
 
@@ -47,8 +49,8 @@ jobs:
     name: run benchmark
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: wcampbell0x2a/rust-bench-compare-action@v3
+      - uses: actions/checkout@v4
+      - uses: wcampbell0x2a/rust-bench-compare-action@v1
         with:
           # Optional. The benchmarking harness: `criterion` (default) or `gungraun`
           harness: "criterion"
@@ -82,9 +84,9 @@ jobs:
     name: run benchmark
     runs-on: ubuntu-latest # gungraun requires Linux
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: gungraun/setup-gungraun@v1
-      - uses: wcampbell0x2a/rust-bench-compare-action@v3
+      - uses: wcampbell0x2a/rust-bench-compare-action@v1
         with:
           harness: "gungraun"
           # All of the criterion options above work here too.
