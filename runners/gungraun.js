@@ -8,16 +8,11 @@ const REPORTED_METRICS = [
   ["EstimatedCycles", "Estimated Cycles"],
 ];
 
-// Summary schema versions this parser understands. gungraun-summary currently
-// ships v6 structures; v7 exists in the schema directory and is layout
-// compatible for the fields we read.
-const SUPPORTED_SUMMARY_VERSIONS = ["6", "7"];
-
 const BASELINE_NAME = "base";
 const CHANGES_NAME = "changes";
 
 /**
- * Metric values are tagged: `{ Int: 56 }` or `{ Float: 0.0 }`.
+ * v6 metric values are tagged: `{ Int: 56 }` or `{ Float: 0.0 }`.
  */
 function metricValue(metric) {
   if (metric === null || typeof metric !== "object") {
@@ -36,8 +31,8 @@ function metricValue(metric) {
 }
 
 /**
- * `metrics` is an EitherOrBoth. Per gungraun's convention the *new* run is on
- * the left and the *old* (baseline) run on the right, so `Both: [new, old]`.
+ * v6 `metrics` is an EitherOrBoth. Per gungraun's convention the *new* run is
+ * on the left and the *old* (baseline) run on the right, so `Both: [new, old]`.
  * A benchmark added in the PR yields `Left` only; one removed yields `Right`.
  */
 function splitEitherOrBoth(metrics) {
@@ -63,6 +58,19 @@ function splitEitherOrBoth(metrics) {
   return { changes: null, base: null };
 }
 
+/**
+ * v7 `values` is `{ new, old }`, `{ new }` or `{ old }`, with plain numbers.
+ */
+function splitNewOld(values) {
+  const pick = (value) => (typeof value === "number" ? value : null);
+
+  if (!values || typeof values !== "object") {
+    return { changes: null, base: null };
+  }
+
+  return { changes: pick(values.new), base: pick(values.old) };
+}
+
 function formatMetric(value) {
   if (value === null) {
     return "N/A";
@@ -76,7 +84,8 @@ function formatMetric(value) {
 
 /**
  * Builds the display name. `module_path` is already the fully qualified
- * `bench_file::group::bench`; `id` and `details` disambiguate parameterised runs.
+ * `bench_file::group::bench`; `id` and the argument text disambiguate
+ * parameterised runs. v6 calls the argument text `details`, v7 `description`.
  */
 function benchmarkName(summary) {
   let name = summary.module_path || summary.function_name || "unknown";
@@ -85,8 +94,9 @@ function benchmarkName(summary) {
     name += ` ${summary.id}`;
   }
 
-  if (summary.details) {
-    name += ` ${summary.details}`;
+  const argumentText = summary.description || summary.details;
+  if (argumentText) {
+    name += ` ${argumentText}`;
   }
 
   return name.replace(/\s+/g, " ").trim();
@@ -99,6 +109,113 @@ function findProfile(summary) {
   return (
     profiles.find((profile) => profile.tool === "Callgrind") || profiles[0]
   );
+}
+
+/**
+ * v6 layout: `profiles[].summaries.total.summary.<Tool>.<Metric>` holds
+ * `{ metrics: EitherOrBoth, diffs: { diff_pct } }`.
+ */
+function readTotalV6(profile) {
+  const total = profile.summaries && profile.summaries.total;
+  if (!total || !total.summary) {
+    return null;
+  }
+
+  // ToolMetricSummary is an externally tagged enum keyed by tool name.
+  const metricsByName = total.summary[profile.tool];
+  if (!metricsByName) {
+    return null;
+  }
+
+  return {
+    regressions: total.regressions,
+    readMetric(key) {
+      const entry = metricsByName[key];
+      if (!entry) {
+        return null;
+      }
+
+      return {
+        ...splitEitherOrBoth(entry.metrics),
+        diffPct: entry.diffs ? entry.diffs.diff_pct : undefined,
+      };
+    },
+  };
+}
+
+/**
+ * v7 layout (gungraun 0.20): `profiles[].data.total.metrics.<Metric>` holds
+ * `{ values: { new, old }, change: { diff_pct } }`.
+ */
+function readTotalV7(profile) {
+  const total = profile.data && profile.data.total;
+  if (!total || !total.metrics) {
+    return null;
+  }
+
+  return {
+    regressions: total.regressions,
+    readMetric(key) {
+      const entry = total.metrics[key];
+      if (!entry) {
+        return null;
+      }
+
+      return {
+        ...splitNewOld(entry.values),
+        diffPct: entry.change ? entry.change.diff_pct : undefined,
+      };
+    },
+  };
+}
+
+const TOTAL_READERS = {
+  6: readTotalV6,
+  7: readTotalV7,
+};
+
+function supportedVersions() {
+  return Object.keys(TOTAL_READERS).join(", ");
+}
+
+/**
+ * Makes one comment row from the base and PR values of a metric. `diffPct`
+ * is gungraun's own percentage, serialised as a string to keep infinities.
+ */
+function metricRow(name, metric, hasRegression) {
+  const { base, changes, diffPct } = metric;
+
+  let difference = "N/A";
+  let significant = false;
+  let faster = false;
+
+  if (base !== null && changes !== null) {
+    const pct =
+      diffPct !== undefined
+        ? Number(diffPct)
+        : base === 0
+        ? 0
+        : -(1 - changes / base) * 100;
+
+    if (Number.isFinite(pct)) {
+      difference = (pct > 0 ? "+" : "") + pct.toFixed(2) + "%";
+
+      // Instruction counts are deterministic, so any real delta counts.
+      if (changes !== base) {
+        significant = true;
+        faster = changes < base;
+      }
+    }
+  }
+
+  return {
+    name,
+    base: formatMetric(base),
+    changes: formatMetric(changes),
+    difference,
+    significant: significant || hasRegression,
+    faster,
+  };
 }
 
 /**
@@ -130,12 +247,11 @@ function parse(stdout) {
     }
 
     const version = String(summary.version);
-    if (!SUPPORTED_SUMMARY_VERSIONS.includes(version)) {
+    const readTotal = TOTAL_READERS[version];
+    if (!readTotal) {
       throw new Error(
         `Unsupported gungraun summary version '${version}'. This action supports ` +
-          `version(s) ${SUPPORTED_SUMMARY_VERSIONS.join(
-            ", "
-          )}. Please open an issue.`
+          `version(s) ${supportedVersions()}. Please open an issue.`
       );
     }
 
@@ -144,14 +260,8 @@ function parse(stdout) {
       continue;
     }
 
-    const total = profile.summaries && profile.summaries.total;
-    if (!total || !total.summary) {
-      continue;
-    }
-
-    // ToolMetricSummary is an externally tagged enum keyed by tool name.
-    const metricsByName = total.summary[profile.tool];
-    if (!metricsByName) {
+    const total = readTotal(profile);
+    if (!total) {
       continue;
     }
 
@@ -160,49 +270,12 @@ function parse(stdout) {
     const name = benchmarkName(summary);
 
     for (const [key, label] of REPORTED_METRICS) {
-      const entry = metricsByName[key];
-      if (!entry) {
+      const metric = total.readMetric(key);
+      if (!metric || (metric.base === null && metric.changes === null)) {
         continue;
       }
 
-      const { base, changes } = splitEitherOrBoth(entry.metrics);
-      if (base === null && changes === null) {
-        continue;
-      }
-
-      let difference = "N/A";
-      let significant = false;
-      let faster = false;
-
-      if (base !== null && changes !== null) {
-        // diff_pct and factor are serialised as strings, not numbers.
-        const diffPct =
-          entry.diffs && entry.diffs.diff_pct !== undefined
-            ? Number(entry.diffs.diff_pct)
-            : base === 0
-            ? 0
-            : -(1 - changes / base) * 100;
-
-        if (Number.isFinite(diffPct)) {
-          difference = (diffPct > 0 ? "+" : "") + diffPct.toFixed(2) + "%";
-
-          // Instruction counts are deterministic, so any real delta counts.
-          // Bold only what gungraun itself flags, or a non-zero change.
-          if (changes !== base) {
-            significant = true;
-            faster = changes < base;
-          }
-        }
-      }
-
-      rows.push({
-        name: `${name} ${label}`,
-        base: formatMetric(base),
-        changes: formatMetric(changes),
-        difference,
-        significant: significant || hasRegression,
-        faster,
-      });
+      rows.push(metricRow(`${name} ${label}`, metric, hasRegression));
     }
   }
 
@@ -282,6 +355,7 @@ export default {
 
   // exported for tests
   splitEitherOrBoth,
+  splitNewOld,
   benchmarkName,
   metricValue,
 };

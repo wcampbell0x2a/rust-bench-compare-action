@@ -176,12 +176,164 @@ test("gungraun: splitEitherOrBoth handles every variant", () => {
   });
 });
 
+// The v7 fixture is real gungraun 0.20.0 output from a PR run with
+// `--callgrind-limits='ir=5%'`: one benchmark is unchanged, one regressed,
+// one got faster, and one is new in the PR.
+const findV7Row = (name) =>
+  gungraun
+    .parse(fixture("gungraun-output-v7.jsonl"))
+    .find((r) => r.name === name);
+
+test("gungraun v7: reports Instructions and Estimated Cycles per benchmark", () => {
+  const names = gungraun
+    .parse(fixture("gungraun-output-v7.jsonl"))
+    .map((r) => r.name);
+
+  assert.deepEqual(names, [
+    "demo_bench::my_group::bench_same Instructions",
+    "demo_bench::my_group::bench_same Estimated Cycles",
+    "demo_bench::my_group::bench_fib short (10) Instructions",
+    "demo_bench::my_group::bench_fib short (10) Estimated Cycles",
+    "demo_bench::my_group::bench_sum Instructions",
+    "demo_bench::my_group::bench_sum Estimated Cycles",
+    "demo_bench::my_group::bench_added Instructions",
+    "demo_bench::my_group::bench_added Estimated Cycles",
+  ]);
+});
+
+test("gungraun v7: new is the PR and old is the base", () => {
+  const ir = findV7Row("demo_bench::my_group::bench_sum Instructions");
+
+  assert.equal(ir.base, "4,014");
+  assert.equal(ir.changes, "13");
+  assert.equal(ir.difference, "-99.68%");
+  assert.equal(ir.significant, true);
+  assert.equal(ir.faster, true);
+});
+
+test("gungraun v7: a regression is signed and flagged", () => {
+  const ir = findV7Row(
+    "demo_bench::my_group::bench_fib short (10) Instructions"
+  );
+  const cycles = findV7Row(
+    "demo_bench::my_group::bench_fib short (10) Estimated Cycles"
+  );
+
+  assert.equal(ir.base, "1,802");
+  assert.equal(ir.changes, "2,158");
+  assert.equal(ir.difference, "+19.76%");
+  assert.equal(ir.significant, true);
+  assert.equal(ir.faster, false);
+  assert.equal(cycles.difference, "+19.92%");
+});
+
+test("gungraun v7: an unchanged benchmark is not marked significant", () => {
+  const ir = findV7Row("demo_bench::my_group::bench_same Instructions");
+
+  assert.equal(ir.base, "8");
+  assert.equal(ir.changes, "8");
+  assert.equal(ir.difference, "0.00%");
+  assert.equal(ir.significant, false);
+});
+
+test("gungraun v7: new-only means the benchmark is new in the PR", () => {
+  const ir = findV7Row("demo_bench::my_group::bench_added Instructions");
+
+  assert.equal(ir.base, "N/A");
+  assert.equal(ir.changes, "13");
+  assert.equal(ir.difference, "N/A");
+  assert.equal(ir.significant, false);
+});
+
+test("gungraun v7: old-only means the benchmark was removed", () => {
+  const line = JSON.stringify({
+    version: "7",
+    module_path: "b::g::gone",
+    profiles: [
+      {
+        tool: "Callgrind",
+        data: {
+          parts: [],
+          total: { metrics: { Ir: { values: { old: 99 } } }, regressions: [] },
+        },
+      },
+    ],
+  });
+  const [ir] = gungraun.parse(line);
+
+  assert.equal(ir.name, "b::g::gone Instructions");
+  assert.equal(ir.base, "99");
+  assert.equal(ir.changes, "N/A");
+  assert.equal(ir.difference, "N/A");
+});
+
+test("gungraun v7: a regression flags the row even with no value change", () => {
+  const line = JSON.stringify({
+    version: "7",
+    module_path: "b::g::flat",
+    profiles: [
+      {
+        tool: "Callgrind",
+        data: {
+          parts: [],
+          total: {
+            metrics: {
+              Ir: {
+                change: { diff_pct: "0", factor: "1" },
+                values: { new: 5, old: 5 },
+              },
+            },
+            regressions: [{ Soft: {} }],
+          },
+        },
+      },
+    ],
+  });
+  const [ir] = gungraun.parse(line);
+
+  assert.equal(ir.difference, "0.00%");
+  assert.equal(ir.significant, true);
+});
+
+test("gungraun v7: a v6 layout under version 7 yields no metrics", () => {
+  const raw = JSON.parse(fixture("gungraun-summary-v6.json"));
+  raw.version = "7";
+
+  assert.throws(
+    () => gungraun.parse(JSON.stringify(raw)),
+    /no comparable metrics were found/
+  );
+});
+
+test("gungraun: splitNewOld handles every variant", () => {
+  assert.deepEqual(gungraun.splitNewOld({ new: 1, old: 2 }), {
+    changes: 1,
+    base: 2,
+  });
+  assert.deepEqual(gungraun.splitNewOld({ new: 5 }), {
+    changes: 5,
+    base: null,
+  });
+  assert.deepEqual(gungraun.splitNewOld({ old: 1.5 }), {
+    changes: null,
+    base: 1.5,
+  });
+  assert.deepEqual(gungraun.splitNewOld(undefined), {
+    changes: null,
+    base: null,
+  });
+  assert.deepEqual(gungraun.splitNewOld({ new: "7" }), {
+    changes: null,
+    base: null,
+  });
+});
+
 test("gungraun: rejects an unsupported summary version", () => {
   const line = JSON.stringify({ version: 99, profiles: [] });
 
   assert.throws(
     () => gungraun.parse(line),
-    /Unsupported gungraun summary version/
+    /Unsupported gungraun summary version '99'.*version\(s\) 6, 7/
   );
 });
 
