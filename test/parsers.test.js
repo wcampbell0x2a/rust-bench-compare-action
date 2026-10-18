@@ -385,3 +385,11 @@ test("report: significant rows bold the winning column", () => {
   assert.ok(md.includes("| x | 10 | **5** | **-50.00%** |"));
   assert.ok(md.includes("## Benchmark for abc1234"));
 });
+
+test("report: the heading names the label when one is given", () => {
+  const md = renderMarkdown([], "abc1234def5678", "Gungraun", "deku_callgrind");
+
+  assert.ok(
+    md.startsWith("## Gungraun Benchmark (deku_callgrind) for abc1234\n")
+  );
+});
