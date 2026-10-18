@@ -14,10 +14,10 @@ store a history and does not use an external service.
 
 Select the harness with the `harness` input:
 
-| `harness`             | Measures                             | Notes                                                            |
-| --------------------- | ------------------------------------ | ---------------------------------------------------------------- |
+| `harness`             | Measures                             | Notes                                                                                         |
+| --------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------- |
 | `criterion` (default) | Wall-clock time                      | CI noise can change the result. Run the benchmark on your machine before you act on a result. |
-| `gungraun`            | Instruction counts, estimated cycles | Uses Valgrind and has almost no noise. Good for CI. Linux only.  |
+| `gungraun`            | Instruction counts, estimated cycles | Uses Valgrind and has almost no noise. Good for CI. Linux only.                               |
 
 > ⚠️ Wall-clock results from the `criterion` harness can change with the load on
 > GitHub Actions. Run these benchmarks on your machine before you make a
@@ -103,6 +103,33 @@ Gungraun also needs debug symbols in the `bench` profile:
 [profile.bench]
 debug = true
 ```
+
+### More than one benchmark
+
+The action writes one comment for each commit of the PR. Each run of the action
+for that commit adds its results to that comment as a new section. Thus a
+matrix of benchmarks gives one comment, not one comment for each benchmark.
+Each push to the PR gives a new comment. A re-run replaces only its own section.
+
+The `harness`, `cwd`, `package`, `benchName`, `features` and `defaultFeatures`
+inputs identify a section. The section heading shows `package` and `benchName`.
+
+```yml
+strategy:
+  matrix:
+    bench: [first_bench, second_bench, third_bench]
+steps:
+  # ...
+  - uses: wcampbell0x2a/rust-bench-compare-action@v1
+    with:
+      harness: "gungraun"
+      benchName: ${{ matrix.bench }}
+      branchName: ${{ github.base_ref }}
+```
+
+Parallel jobs can write to the comment at the same time. After each write, the
+action reads the comment again. If its section is not there, the action waits
+for a random time and writes it again.
 
 ## Troubleshooting
 

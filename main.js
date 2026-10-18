@@ -4,6 +4,7 @@ import * as core from "@actions/core";
 import * as github from "@actions/github";
 
 import { renderMarkdown, renderTable } from "./lib/report.js";
+import { sectionKey, upsertSection } from "./lib/comment.js";
 import criterion from "./runners/criterion.js";
 import gungraun from "./runners/gungraun.js";
 
@@ -178,26 +179,63 @@ async function main() {
   core.setOutput("stderr", comparisonOutput.stderr);
 
   const rows = runner.parse(comparisonOutput.stdout);
+  const label =
+    [inputs.package, inputs.benchName].filter(Boolean).join(" / ") || undefined;
   const resultsAsMarkdown = renderMarkdown(
     rows,
     context.sha,
-    runner.displayName
+    runner.displayName,
+    label
   );
 
   // An authenticated instance of `@octokit/rest`
   const octokit = github.getOctokit(inputs.token);
 
-  const contextObj = { ...context.issue };
+  const { owner, repo, number: issueNumber } = context.issue;
+  const api = {
+    listComments: () =>
+      octokit.paginate(octokit.rest.issues.listComments, {
+        owner,
+        repo,
+        issue_number: issueNumber,
+        per_page: 100,
+      }),
+    createComment: async (body) =>
+      (
+        await octokit.rest.issues.createComment({
+          owner,
+          repo,
+          issue_number: issueNumber,
+          body,
+        })
+      ).data,
+    updateComment: async (commentId, body) =>
+      (
+        await octokit.rest.issues.updateComment({
+          owner,
+          repo,
+          comment_id: commentId,
+          body,
+        })
+      ).data,
+    deleteComment: (commentId) =>
+      octokit.rest.issues.deleteComment({
+        owner,
+        repo,
+        comment_id: commentId,
+      }),
+  };
 
   try {
-    const { data: comment } = await octokit.rest.issues.createComment({
-      owner: contextObj.owner,
-      repo: contextObj.repo,
-      issue_number: contextObj.number,
-      body: resultsAsMarkdown,
+    const comment = await upsertSection({
+      api,
+      sha: context.sha,
+      key: sectionKey(inputs),
+      content: resultsAsMarkdown,
+      log: core.info,
     });
     core.info(
-      `Created comment id '${comment.id}' on issue '${contextObj.number}' in '${contextObj.repo}'.`
+      `Updated comment id '${comment.id}' on issue '${issueNumber}' in '${repo}'.`
     );
     core.setOutput("comment-id", comment.id);
   } catch (err) {
