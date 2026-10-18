@@ -402,3 +402,32 @@ test("comment: parallel runs give one comment with all sections (randomized)", a
     );
   }
 });
+
+test("comment: a blank line separates each marker from the Markdown", () => {
+  const body = renderComment(
+    SHA,
+    new Map([
+      ["a", "## First\n  <details>\n  </details>"],
+      ["b", "## Second"],
+    ])
+  );
+  const lines = body.split("\n");
+
+  lines.forEach((line, i) => {
+    if (line.startsWith("<!-- rust-bench-compare:")) {
+      assert.ok(i === 0 || lines[i - 1] === "", `blank line before ${line}`);
+      assert.equal(lines[i + 1], "", `blank line after ${line}`);
+    }
+  });
+});
+
+test("comment: parse reads a body from the earlier layout without blank lines", () => {
+  const body = [
+    `<!-- rust-bench-compare:sha ${SHA} -->`,
+    "<!-- rust-bench-compare:section a -->",
+    "## First",
+    "<!-- rust-bench-compare:end a -->",
+  ].join("\n");
+
+  assert.equal(parseSections(body).get("a"), "## First");
+});
